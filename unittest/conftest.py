@@ -1,10 +1,21 @@
 import os
 import re
 import pytest
+import logging
 from glob import glob
 
 
+if os.getenv('GITHUB_ACTIONS'):
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        filename='JavSP.log',
+        filemode='w'
+    )
+
+
 data_dir = os.path.join(os.path.dirname(__file__), 'data')
+
 
 
 def pytest_addoption(parser):

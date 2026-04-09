@@ -52,22 +52,41 @@ def _get_javbus_urls() -> list:
 
 def _get_javlib_urls() -> list:
     html = get_html('https://github.com/javlibcom')
-    text = html.xpath("//div[@class='p-note user-profile-bio mb-3 js-user-profile-bio f4']")[0].text_content()
-    match = re.search(r'[\w\.]+', text, re.A)
-    if match:
-        domain = f'https://www.{match.group(0)}.com'
-        return [domain]
+    bios = html.xpath("//div[contains(@class, 'user-profile-bio')]")
+    if bios:
+        text = bios[0].text_content()
+        match = re.search(r'([a-zA-Z0-9]{4,})', text, re.A)
+        if match:
+            domain = f'https://www.{match.group(1)}.com'
+            return [domain]
+    return []
 
 
 def _get_javdb_urls() -> list:
-    html = get_html('https://jav524.app')
-    js_links = html.xpath("//script[@src]/@src")
-    for link in js_links:
-        if '/js/index' in link:
-            text = get_resp_text(request_get(link))
-            match = re.search(r'\$officialUrl\s*=\s*"(https://(?:[\d\w][-\d\w]{1,61}[\d\w]\.){1,2}[a-z]{2,})"', text, flags=re.I | re.A)
-            if match:
-                return [match.group(1)]
+    urls = []
+    try:
+        html = get_html('https://jav.app', timeout=5)
+        links = html.xpath("//a[contains(@href, 'javdb')]/@href")
+        urls.extend([l for l in links if l.startswith('http')])
+    except:
+        pass
+    
+    if not urls:
+        try:
+            html = get_html('https://jav524.app')
+            js_links = html.xpath("//script[@src]/@src")
+            for link in js_links:
+                if '/js/index' in link:
+                    text = get_resp_text(request_get(link))
+                    match = re.search(r'\$officialUrl\s*=\s*"(https://(?:[\d\w][-\d\w]{1,61}[\d\w]\.){1,2}[a-z]{2,})"', text, flags=re.I | re.A)
+                    if match:
+                        urls.append(match.group(1))
+        except:
+            pass
+    
+    # Fallback to permanent URL if others fail
+    urls.append('https://javdb.com')
+    return urls
 
 
 if __name__ == "__main__":

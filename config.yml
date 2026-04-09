@@ -28,10 +28,10 @@ network:
   proxy_server: null
   # 各个站点的免代理地址。地址失效时软件会自动尝试获取新地址，你也可以手动设置
   proxy_free:
-    avsox: 'https://avsox.click'
-    javbus: 'https://www.seedmm.help'
-    javdb: 'https://javdb368.com'
-    javlib: 'https://www.y78k.com'
+    avsox: 'https://avsox.host'
+    javbus: 'https://www.javbus.com'
+    javdb: 'https://javdb.com'
+    javlib: 'https://www.javlibrary.com'
   # 网络问题导致抓取数据失败时的重试次数，通常3次就差不多了
   retry: 3
   # https://en.wikipedia.org/wiki/ISO_8601#Durations
@@ -110,11 +110,11 @@ summarizer:
     custom_genres_fields: ['{genre}', '{censor}']
     # 要添加到自定义标签的字段，空列表表示不添加
     custom_tags_fields: ['{genre}', '{censor}']
-  # 依次设置 已知无码/已知有码/不确定 这三种情况下 {censor} 对应的文本(可以利用此变量将有码/无码影片整理到不同文件夹)
+  # 依次设置 已知无码/已知有码/不确定 这三种情况下 {censor} 对应的内容(可以利用此变量将有码/无码影片整理到不同文件夹)
   censor_options_representation: ['无码', '有码', '打码情况未知']
 
   cover:
-    # 封面文件的名称（不含拓展名），可以使用如`{title}`等字段
+    # 封面文件的名称（不含拓展名），可以使用如`{{title}}`等字段
     basename_pattern: "poster"
     # 尽可能下载高清封面？（高清封面大小约 8-10 MiB，远大于普通封面，如果你的网络条件不佳，会降低整理速度）
     highres: true
@@ -138,7 +138,7 @@ summarizer:
       ## }}}
 
   fanart:
-    # 横版封面文件的名称（不含拓展名），可以使用如`{title}`等字段
+    # 横版封面文件的名称（不含拓展名），可以使用如`{{title}}`等字段
     basename_pattern: "fanart"
 
   extra_fanarts:

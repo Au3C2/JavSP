@@ -1,4 +1,5 @@
 """从FC2官网抓取数据"""
+import re
 import logging
 
 
@@ -42,40 +43,68 @@ def parse_data(movie: MovieInfo):
     if '/id.fc2.com/' in resp.url:
         raise SiteBlocked('FC2要求当前IP登录账号才可访问，请尝试更换为日本IP')
     html = resp2html(resp)
-    container = html.xpath("//div[@class='items_article_left']")
-    if len(container) > 0:
-        container = container[0]
-    else:
+    container_tags = html.xpath("//div[@class='items_article_left']")
+    if not container_tags:
         raise MovieNotFoundError(__name__, movie.dvdid)
+    container = container_tags[0]
+    
     # FC2 标题增加反爬乱码，使用数组合并标题
     title_arr = container.xpath("//div[@class='items_article_headerInfo']/h3/text()")
     title = ''.join(title_arr)
-    thumb_tag = container.xpath("//div[@class='items_article_MainitemThumb']")[0]
-    thumb_pic = thumb_tag.xpath("span/img/@src")[0]
-    duration_str = thumb_tag.xpath("span/p[@class='items_article_info']/text()")[0]
+    # 彻底清理 FC2 各种各样的修饰符，例如：【個人撮影】、【背徳の編】
+    title = re.sub(r'【.*?】', '', title).strip()
+    
+    thumb_tags = container.xpath("//div[@class='items_article_MainitemThumb']")
+    if thumb_tags:
+        thumb_tag = thumb_tags[0]
+        thumb_pic_tags = thumb_tag.xpath("span/img/@src")
+        thumb_pic = thumb_pic_tags[0] if thumb_pic_tags else ""
+        duration_tags = thumb_tag.xpath("span/p[@class='items_article_info']/text()")
+        duration_str = duration_tags[0] if duration_tags else ""
+    else:
+        thumb_pic, duration_str = '', ''
+
     # FC2没有制作商和发行商的区分，作为个人市场，影片页面的'by'更接近于制作商
-    producer = container.xpath("//li[text()='by ']/a/text()")[0]
+    producer_tags = container.xpath("//li[contains(text(), 'by')]/a/text()")
+    producer = producer_tags[0] if producer_tags else ''
+    
     genre = container.xpath("//a[@class='tag tagTag']/text()")
-    date_str = container.xpath("//div[@class='items_article_Releasedate']/p/text()")[0]
-    publish_date = date_str[-10:].replace('/', '-')  # '販売日 : 2017/11/30'
+    
+    # 日期提取：兼容 Releasedate 和 softDevice 类名
+    date_tags = container.xpath("//div[contains(@class, 'items_article_Releasedate') or contains(@class, 'softDevice')]/p/text()")
+    if date_tags:
+        # 寻找包含日期格式的部分
+        date_str = ""
+        for t in date_tags:
+            m = re.search(r'\d{4}/\d{2}/\d{2}', t)
+            if m:
+                date_str = m.group(0)
+                break
+        publish_date = date_str.replace('/', '-')
+    else:
+        publish_date = ''
+
     preview_pics = container.xpath("//ul[@data-feed='sample-images']/li/a/@href")
 
     if Cfg().crawler.hardworking:
-        # 通过评论数据来计算准确的评分
         score = get_movie_score(fc2_id)
         if score:
             movie.score = f'{score:.2f}'
-        # 预览视频是动态加载的，不在静态网页中
-        desc_frame_url = container.xpath("//section[@class='items_article_Contents']/iframe/@src")[0]
-        key = desc_frame_url.split('=')[-1]     # /widget/article/718323/description?ac=60fc08fa...
-        api_url = f'{base_url}/api/v2/videos/{fc2_id}/sample?key={key}'
-        r = request_get(api_url).json()
-        movie.preview_video = r['path']
+        desc_frame_url_tags = container.xpath("//section[@class='items_article_Contents']/iframe/@src")
+        if desc_frame_url_tags:
+            desc_frame_url = desc_frame_url_tags[0]
+            key = desc_frame_url.split('=')[-1]
+            api_url = f'{base_url}/api/v2/videos/{fc2_id}/sample?key={key}'
+            try:
+                r = request_get(api_url).json()
+                movie.preview_video = r.get('path')
+            except:
+                pass
     else:
-        # 获取影片评分。影片页面的评分只能粗略到星级，且没有分数，要通过类名来判断，如'items_article_Star5'表示5星
-        score_tag_attr = container.xpath("//a[@class='items_article_Stars']/p/span/@class")[0]
-        score = int(score_tag_attr[-1]) * 2
-        movie.score = f'{score:.2f}'
+        score_tag_attr = container.xpath("//a[@class='items_article_Stars']/p/span/@class")
+        if score_tag_attr:
+            score = int(score_tag_attr[0][-1]) * 2
+            movie.score = f'{score:.2f}'
 
     movie.dvdid = id_uc
     movie.url = url
@@ -85,7 +114,6 @@ def parse_data(movie: MovieInfo):
     movie.duration = str(strftime_to_minutes(duration_str))
     movie.publish_date = publish_date
     movie.preview_pics = preview_pics
-    # FC2的封面是220x220的，和正常封面尺寸、比例都差太多。如果有预览图片，则使用第一张预览图作为封面
     if movie.preview_pics:
         movie.cover = preview_pics[0]
     else:
@@ -95,11 +123,9 @@ def parse_data(movie: MovieInfo):
 if __name__ == "__main__":
     import pretty_errors
     pretty_errors.configure(display_link=True)
-    logger.root.handlers[1].level = logging.DEBUG
-
     movie = MovieInfo('FC2-718323')
     try:
         parse_data(movie)
         print(movie)
-    except CrawlerError as e:
-        logger.error(e, exc_info=1)
+    except Exception as e:
+        print(e)

@@ -1,23 +1,17 @@
-# This is a basic workflow to help you get started with Actions
+name: Build and Release
 
-name: Cx_Freeze
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events
   push:
     branches:
-    - master
+      - master
+    tags:
+      - 'v*'
   pull_request:
     branches:
-    - master
-
-  # Allows you to run this workflow manually from the Actions tab
+      - master
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
   build:
     name: Build binaries on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -25,9 +19,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-13]
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
         with:
           submodules: 'true'
@@ -48,19 +40,70 @@ jobs:
         run: poetry self add poetry-dynamic-versioning
 
       - name: Install dependencies
-        run: |
-          poetry install
+        run: poetry install
 
       - name: Build with Cx_Freeze
         run: poetry run python setup.py build_exe -b dist
 
-      - name: Set VERSION variable for windows
+      - name: Set VERSION variable
         shell: bash
+        run: echo "VERSION=$(poetry run python tools/version.py)" >> $GITHUB_ENV
+
+      - name: Package Artifacts (Windows)
+        if: matrix.os == 'windows-latest'
         run: |
-          echo "VERSION=`poetry run python tools/version.py`" >> $GITHUB_ENV
+          powershell Compress-Archive -Path dist\* -DestinationPath JavSP-${{ env.VERSION }}-windows-x64.zip
+
+      - name: Package Artifacts (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd dist
+          tar -czvf ../JavSP-${{ env.VERSION }}-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'macos' }}-x64.tar.gz .
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: JavSP-${{ env.VERSION }}-${{ matrix.os }}
-          path: dist
+          path: |
+            *.zip
+            *.tar.gz
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract Changelog
+        id: extract_changelog
+        shell: bash
+        run: |
+          # 提取 ## [Unreleased] 到下一个 ## 之间的内容
+          # 如果是正式发布，通常我们会把 Unreleased 改名为版本号，
+          # 这里我们提取最顶部的更新块（假设 Unreleased 包含最新改动）
+          changelog=$(sed -n '/## \[Unreleased\]/,/## v/p' CHANGELOG.md | sed '1d;$d')
+          if [ -z "$changelog" ]; then
+            # 备选：如果 Unreleased 为空，尝试提取第一个版本号下的内容
+            changelog=$(sed -n '/## v/,/## v/p' CHANGELOG.md | sed '$d')
+          fi
+          echo "BODY<<EOF" >> $GITHUB_OUTPUT
+          echo "$changelog" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.extract_changelog.outputs.BODY }}
+          files: artifacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

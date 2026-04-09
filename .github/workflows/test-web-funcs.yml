@@ -59,4 +59,4 @@ jobs:
       if: ${{ always() }}
       with:
         name: JavSP-web-funcs.log
-        path: javspn/JavSP.log
+        path: JavSP.log

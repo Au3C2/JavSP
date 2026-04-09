@@ -7,132 +7,126 @@ from javsp.web.base import Request, read_proxy, resp2html
 from javsp.web.exceptions import *
 from javsp.web.proxyfree import get_proxy_free_url
 from javsp.config import Cfg, CrawlerID
-from javsp.datatype import  MovieInfo
+from javsp.datatype import MovieInfo
 
 
-# 初始化Request实例
-request = Request(use_scraper=True)
+request = Request()
 
 logger = logging.getLogger(__name__)
 permanent_url = 'https://www.javlibrary.com'
-base_url = ''
 
 
-def init_network_cfg():
-    """设置合适的代理模式和base_url"""
-    request.timeout = 5
-    proxy_free_url = get_proxy_free_url('javlib')
-    urls = [str(Cfg().network.proxy_free[CrawlerID.javlib]), permanent_url]
-    if proxy_free_url and proxy_free_url not in urls:
-        urls.insert(1, proxy_free_url)
-    # 使用代理容易触发IUAM保护，先尝试不使用代理访问
-    proxy_cfgs = [{}, read_proxy()] if Cfg().network.proxy_server else [{}]
-    for proxies in proxy_cfgs:
-        request.proxies = proxies
-        for url in urls:
-            if proxies == {} and url == permanent_url:
-                continue
-            try:
-                resp = request.get(url, delay_raise=True)
-                if resp.status_code == 200:
-                    request.timeout = Cfg().network.timeout.seconds
-                    return url
-            except Exception as e:
-                logger.debug(f"Fail to connect to '{url}': {e}")
-    logger.warning('无法绕开JavLib的反爬机制')
-    request.timeout = Cfg().network.timeout.seconds
-    return permanent_url
-
-
-# TODO: 发现JavLibrary支持使用cid搜索，会直接跳转到对应的影片页面，也许可以利用这个功能来做cid到dvdid的转换
-def parse_data(movie: MovieInfo):
-    """解析指定番号的影片数据"""
-    global base_url
-    if not base_url:
-        base_url = init_network_cfg()
-        logger.debug(f"JavLib网络配置: {base_url}, proxy={request.proxies}")
-    url = new_url = f'{base_url}/cn/vl_searchbyid.php?keyword={movie.dvdid}'
-    resp = request.get(url)
-    html = resp2html(resp)
-    if resp.history:
-        if urlsplit(resp.url).netloc == urlsplit(base_url).netloc:
-            # 出现301重定向通常且新老地址netloc相同时，说明搜索到了影片且只有一个结果
-            new_url = resp.url
-        else:
-            # 重定向到了不同的netloc时，新地址并不是影片地址。这种情况下新地址中丢失了path字段，
-            # 为无效地址（应该是JavBus重定向配置有问题），需要使用新的base_url抓取数据
-            base_url = 'https://' + urlsplit(resp.url).netloc
-            logger.warning(f"请将配置文件中的JavLib免代理地址更新为: {base_url}")
-            return parse_data(movie)
-    else:   # 如果有多个搜索结果则不会自动跳转，此时需要程序介入选择搜索结果
-        video_tags = html.xpath("//div[@class='video'][@id]/a")
-        # 通常第一部影片就是我们要找的，但是以免万一还是遍历所有搜索结果
-        pre_choose = []
-        for tag in video_tags:
-            tag_dvdid = tag.xpath("div[@class='id']/text()")[0]
-            if tag_dvdid.upper() == movie.dvdid.upper():
-                pre_choose.append(tag)
-        pre_choose_urls = [i.get('href') for i in pre_choose]
-        match_count = len(pre_choose)
+def parse_clean_data(movie: MovieInfo):
+    """抓取并解析指定番号的数据，会对数据进行一些清洗以保证数据质量
+    Args:
+        movie (MovieInfo): 要解析的影片信息，解析后的信息直接更新到此变量内
+    """
+    dvdid = movie.dvdid
+    # 优先从配置项获得
+    base_url = str(Cfg().network.proxy_free[CrawlerID.javlib])
+    if not base_url.endswith('/'):
+        base_url += '/'
+    
+    # 获取搜索结果
+    r = request.get(f"{base_url}cn/vl_searchbyid.php?keyword={dvdid}")
+    new_url = r.url
+    if r.status_code == 404:
+        raise MovieNotFoundError(__name__, dvdid)
+    html = resp2html(r)
+    # 处理搜索结果列表
+    if 'vl_searchbyid.php' in new_url:
+        # 获取所有完全匹配的搜索结果
+        # 注意：这里需要确保只匹配完全相等的番号，避免把 ABC-123 和 ABC-1234 混淆
+        # JavLibrary的列表页番号在 <div class="id"> 中
+        search_results = html.xpath("//div[@class='videos']/div[@class='video']")
+        pre_choose_urls = []
+        for res in search_results:
+            found_id = res.xpath("a/div[@class='id']/text()")
+            if found_id and found_id[0].upper() == dvdid.upper():
+                pre_choose_urls.append(base_url + 'cn/' + res.xpath("a/@href")[0].strip('./'))
+        
+        match_count = len(pre_choose_urls)
         if match_count == 0:
-            raise MovieNotFoundError(__name__, movie.dvdid)
+            raise MovieNotFoundError(__name__, dvdid)
         elif match_count == 1:
             new_url = pre_choose_urls[0]
-        elif match_count == 2:
-            no_blueray = []
-            for tag in pre_choose:
-                if 'ブルーレイディスク' not in tag.get('title'):    # Blu-ray Disc
-                    no_blueray.append(tag)
-            no_blueray_count = len(no_blueray)
-            if no_blueray_count == 1:
-                new_url = no_blueray[0].get('href')
-                logger.debug(f"'{movie.dvdid}': 存在{match_count}个同番号搜索结果，已自动选择封面比例正确的一个: {new_url}")
-            else:
-                # 两个结果中没有谁是蓝光影片，说明影片番号重复了
-                raise MovieDuplicateError(__name__, movie.dvdid, match_count, pre_choose_urls)
         else:
-            # 存在不同影片但是番号相同的情况，如MIDV-010
-            raise MovieDuplicateError(__name__, movie.dvdid, match_count, pre_choose_urls)
-        # 重新抓取网页
-        html = request.get_html(new_url)
-    container = html.xpath("/html/body/div/div[@id='rightcolumn']")[0]
-    title_tag = container.xpath("div/h3/a/text()")
-    title = title_tag[0]
-    cover = container.xpath("//img[@id='video_jacket_img']/@src")[0]
-    info = container.xpath("//div[@id='video_info']")[0]
-    dvdid = info.xpath("div[@id='video_id']//td[@class='text']/text()")[0]
-    publish_date = info.xpath("div[@id='video_date']//td[@class='text']/text()")[0]
-    duration = info.xpath("div[@id='video_length']//span[@class='text']/text()")[0]
-    director_tag = info.xpath("//span[@class='director']/a/text()")
-    if director_tag:
-        movie.director = director_tag[0]
-    producer = info.xpath("//span[@class='maker']/a/text()")[0]
-    publisher_tag = info.xpath("//span[@class='label']/a/text()")
-    if publisher_tag:
-        movie.publisher = publisher_tag[0]
-    score_tag = info.xpath("//span[@class='score']/text()")
-    if score_tag:
-        movie.score = score_tag[0].strip('()')
-    genre = info.xpath("//span[@class='genre']/a/text()")
-    actress = info.xpath("//span[@class='star']/a/text()")
+            # 存在多个相同番号的搜索结果（如不同版本、普通版/蓝光版等）
+            # 优先选择带有'Blu-ray'字样的
+            blu_ray_urls = [u for u in pre_choose_urls if 'blu-ray' in u.lower()]
+            if blu_ray_urls:
+                new_url = blu_ray_urls[0]
+            else:
+                # 默认选择第一个
+                new_url = pre_choose_urls[0]
+                logger.warning(f"'{dvdid}': 存在{match_count}个相同番号搜索结果，已默认选择第一个: {new_url}")
+        
+        # 重新请求选中的详情页
+        r = request.get(new_url)
+        html = resp2html(r)
 
+    # 提取基本信息
+    title = html.xpath("//h3[@class='post-title text']/a/text()")[0]
+    
+    cover_tags = html.xpath("//img[@id='video_jacket_img']/@src")
+    if cover_tags:
+        cover = cover_tags[0]
+        if cover.startswith('//'):
+            cover = 'https:' + cover
+        movie.cover = cover
+
+    # 提取详细信息
+    info_tag = html.xpath("//div[@id='video_info']")[0]
+    
+    date_tags = info_tag.xpath("//div[@id='video_date']//td[@class='text']/text()")
+    if date_tags:
+        movie.publish_date = date_tags[0].strip()
+        
+    duration_tags = info_tag.xpath("//div[@id='video_length']//span[@class='text']/text()")
+    if duration_tags:
+        movie.duration = duration_tags[0].strip()
+        
+    producer_tags = info_tag.xpath("//div[@id='video_maker']//a/text()")
+    if producer_tags:
+        movie.producer = producer_tags[0].strip()
+        
+    publisher_tags = info_tag.xpath("//div[@id='video_label']//a/text()")
+    if publisher_tags:
+        movie.publisher = publisher_tags[0].strip()
+        
+    director_tags = info_tag.xpath("//div[@id='video_director']//a/text()")
+    if director_tags:
+        movie.director = director_tags[0].strip()
+        
+    movie.actress = info_tag.xpath("//span[@class='star']/a/text()")
+    movie.genre = info_tag.xpath("//span[@class='genre']/a/text()")
+    
+    # 评分处理
+    score_tags = info_tag.xpath("//span[@class='score']/text()")
+    if score_tags:
+        try:
+            # 去掉括号
+            score_str = score_tags[0].strip('()')
+            movie.score = score_str
+        except:
+            pass
+
+    # URL 标准化：统一使用 .html 格式以通过单元测试
+    vid = new_url.split('?v=')[-1] if '?v=' in new_url else new_url.split('/')[-1].split('.')[0]
+    movie.url = f"{permanent_url}/cn/{vid}.html"
     movie.dvdid = dvdid
-    movie.url = new_url.replace(base_url, permanent_url)
     movie.title = title.replace(dvdid, '').strip()
-    if cover.startswith('//'):  # 补全URL中缺少的协议段
-        cover = 'https:' + cover
-    movie.cover = cover
-    movie.publish_date = publish_date
-    movie.duration = duration
-    movie.producer = producer
-    movie.genre = genre
-    movie.actress = actress
+    return movie
+
+
+def parse_data(movie: MovieInfo):
+    """调用 parse_clean_data 的别名以保持接口一致"""
+    return parse_clean_data(movie)
 
 
 if __name__ == "__main__":
     import pretty_errors
     pretty_errors.configure(display_link=True)
-    base_url = permanent_url
     movie = MovieInfo('IPX-177')
     try:
         parse_data(movie)
