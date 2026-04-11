@@ -28,7 +28,8 @@ lxml = {extras = ["html-clean"], version = "^5.2.1"}
 confz = "^2.0.1"
 pydantic-extra-types = "^2.9.0"
 pendulum = "^3.0.0"
-slimeface = "^2024.9.27"
+# slimeface 编译在 macOS ARM 下存在兼容性问题，目前设为 Windows 专用
+slimeface = {version = "^2024.9.27", markers = "sys_platform == 'win32'"}
 
 [tool.poetry.scripts]
 javsp = "javsp.__main__:entry"
