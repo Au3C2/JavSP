@@ -39,6 +39,8 @@ jobs:
       run: poetry self add poetry-dynamic-versioning
     - name: Install dependencies
       run: |
+        # 强制同步 lock 文件哈希以适配 pyproject.toml 的修改
+        poetry lock --no-update
         poetry install
     - name: Test avid.py
       run: |

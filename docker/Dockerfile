@@ -12,11 +12,13 @@ COPY . .
 
 RUN poetry self add poetry-dynamic-versioning && \
     poetry config virtualenvs.in-project true && \
+    # 强制同步 lock 文件哈希以适配 pyproject.toml 的修改
+    poetry lock --no-update && \
     poetry install && \
     rm -rf /app/.git
 
 
-FROM python:3.12-slim as runner
+FROM python:3.12-slim AS runner
 
 WORKDIR /app
 
