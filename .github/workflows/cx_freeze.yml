@@ -16,6 +16,7 @@ jobs:
     name: Build binaries on ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -48,8 +49,14 @@ jobs:
       - name: Setup dynamic versioning
         run: poetry self add poetry-dynamic-versioning
 
+      - name: Configure Poetry (PyPI only)
+        run: |
+          # 禁用清华镜像，CI 环境下官方源更快更稳
+          poetry source remove mirrors || true
+          poetry config repositories.mirrors false || true
+
       - name: Install dependencies
-        run: poetry install
+        run: poetry install --no-root --no-interaction
 
       - name: Build with Cx_Freeze
         run: poetry run python setup.py build_exe -b dist
@@ -98,7 +105,6 @@ jobs:
           # 提取 [Unreleased] 下方的更新内容
           changelog=$(sed -n '/## \[Unreleased\]/,/## v/p' CHANGELOG.md | sed '1d;$d')
           if [ -z "$changelog" ]; then
-            # 备选：提取最近一个版本号的内容
             changelog=$(sed -n '/## v/,/## v/p' CHANGELOG.md | sed '$d')
           fi
           echo "BODY<<EOF" >> $GITHUB_OUTPUT
