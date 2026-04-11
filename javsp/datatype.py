@@ -172,9 +172,9 @@ class Movie:
         def move_file(src:str, dst:str):
             """移动（重命名）文件并记录信息到日志"""
             abs_dst = os.path.abspath(dst)
-            # shutil.move might overwrite dst file
             if os.path.exists(abs_dst):
-                raise FileExistsError(f'File exists: {abs_dst}')
+                logger.warning(f"目标文件已存在，跳过整理: {os.path.basename(dst)}")
+                return
             if (use_hardlink):
                 os.link(src, abs_dst)
             else:
@@ -182,26 +182,46 @@ class Movie:
             src_rel = os.path.relpath(src)
             dst_name = os.path.basename(dst)
             logger.info(f"重命名文件: '{src_rel}' -> '...{os.sep}{dst_name}'")
-            # 目前StreamHandler并未设置filter，为了避免显示中出现重复的日志，这里暂时只能用debug级别
             filemove_logger.debug(f'移动（重命名）文件: \n  原路径: "{src}"\n  新路径: "{abs_dst}"')
+
+        def sync_subtitles(video_src: str, video_dst_base: str):
+            """扫描并同步整理配套字幕"""
+            video_dir = os.path.dirname(video_src)
+            video_name_no_ext = os.path.splitext(os.path.basename(video_src))[0].lower()
+            sub_exts = {'.srt', '.ass', '.ssa', '.vtt', '.sub', '.idx'}
+            
+            try:
+                for f in os.listdir(video_dir):
+                    f_name, f_ext = os.path.splitext(f)
+                    if f_ext.lower() in sub_exts and f_name.lower() == video_name_no_ext:
+                        sub_src = os.path.join(video_dir, f)
+                        sub_dst = video_dst_base + f_ext
+                        move_file(sub_src, sub_dst)
+            except Exception as e:
+                logger.warning(f"整理字幕时出错: {e}")
 
         new_paths = []
         dir = os.path.dirname(self.files[0])
         if len(self.files) == 1:
             fullpath = self.files[0]
             ext = os.path.splitext(fullpath)[1]
-            newpath = os.path.join(self.save_dir, self.basename + ext)
+            new_base = os.path.join(self.save_dir, self.basename)
+            newpath = new_base + ext
+            # 先搬视频
             move_file(fullpath, newpath)
+            # 再搬字幕
+            sync_subtitles(fullpath, new_base)
             new_paths.append(newpath)
         else:
             for i, fullpath in enumerate(self.files, start=1):
                 ext = os.path.splitext(fullpath)[1]
-                newpath = os.path.join(self.save_dir, self.basename + f'-CD{i}' + ext)
+                new_base = os.path.join(self.save_dir, self.basename + f'-CD{i}')
+                newpath = new_base + ext
                 move_file(fullpath, newpath)
+                sync_subtitles(fullpath, new_base)
                 new_paths.append(newpath)
         self.new_paths = new_paths
-        if len(os.listdir(dir)) == 0:
-            #如果移动文件后目录为空则删除该目录
+        if os.path.exists(dir) and len(os.listdir(dir)) == 0:
             os.rmdir(dir)
 
 

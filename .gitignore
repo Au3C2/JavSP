@@ -134,3 +134,14 @@ ver_hook.py
 
 .idea
 .vscode
+
+# Project specific ignores
+logs_*/
+*.zip
+*.rar
+*.ini
+*.log
+config.ini
+dist/
+build/
+*.spec

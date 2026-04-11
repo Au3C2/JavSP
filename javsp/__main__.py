@@ -1,6 +1,20 @@
 import os
-import re
 import sys
+
+# --- PyInstaller 资源重定向补丁 ---
+if getattr(sys, 'frozen', False):
+    _base_path = getattr(sys, '_MEIPASS', os.getcwd())
+    # 采用版本感知的标准布局
+    _tcl_root = os.path.join(_base_path, 'tcl_tk')
+    
+    # 递归寻找包含 init.tcl 的目录
+    for root, dirs, files in os.walk(_tcl_root):
+        if 'init.tcl' in files:
+            os.environ['TCL_LIBRARY'] = root
+        if 'tk.tcl' in files:
+            os.environ['TK_LIBRARY'] = root
+
+import re
 import json
 import time
 import logging
@@ -50,6 +64,8 @@ from javsp.prompt import prompt
 
 actressAliasMap = {}
 
+import importlib
+
 def resolve_alias(name):
     """将别名解析为固定的名字"""
     for fixedName, aliases in actressAliasMap.items():
@@ -61,21 +77,25 @@ def resolve_alias(name):
 def import_crawlers():
     """按配置文件的抓取器顺序将该字段转换为抓取器的函数列表"""
     unknown_mods = []
-    for _, mods in Cfg().crawler.selection.items():
-        valid_mods = []
-        for name in mods:
-            try:
-                # 导入fc2fan抓取器的前提: 配置了fc2fan的本地路径
-                # if name == 'fc2fan' and (not os.path.isdir(Cfg().Crawler.fc2fan_local_path)):
-                #     logger.debug('由于未配置有效的fc2fan路径，已跳过该抓取器')
-                #     continue
-                import_name = 'javsp.web.' + name
-                __import__(import_name)
-                valid_mods.append(import_name)  # 抓取器有效: 使用完整模块路径，便于程序实际使用
-            except ModuleNotFoundError:
-                unknown_mods.append(name)       # 抓取器无效: 仅使用模块名，便于显示
+    # 强制预加载所有可能用到的模块
+    all_selections = []
+    # Pydantic V2 模型需转换为字典后才能调用 .values()
+    selection_dict = Cfg().crawler.selection.model_dump()
+    for mods in selection_dict.values():
+        all_selections.extend(mods)
+    
+    for name in set(all_selections):
+        try:
+            import_name = 'javsp.web.' + name.value if hasattr(name, 'value') else 'javsp.web.' + str(name)
+            importlib.import_module(import_name)
+        except (ModuleNotFoundError, ImportError):
+            unknown_mods.append(str(name))
+            
     if unknown_mods:
-        logger.warning('配置的抓取器无效: ' + ', '.join(unknown_mods))
+        msg = '配置的抓取器无效: ' + ', '.join(unknown_mods)
+        logger.warning(msg)
+        return False
+    return True
 
 
 # 爬虫是IO密集型任务，可以通过多线程提升效率
@@ -84,7 +104,6 @@ def parallel_crawler(movie: Movie, tqdm_bar=None):
     def wrapper(parser, info: MovieInfo, retry):
         """对抓取器函数进行包装，便于更新提示信息和自动重试"""
         crawler_name = threading.current_thread().name
-        task_info = f'Crawler: {crawler_name}: {info.dvdid}'
         for cnt in range(retry):
             try:
                 parser(info)
@@ -123,20 +142,22 @@ def parallel_crawler(movie: Movie, tqdm_bar=None):
             all_info[i.value] = MovieInfo(movie.dvdid)
     thread_pool = []
     for mod_partial, info in all_info.items():
-        mod = f"javsp.web.{mod_partial}"
-        parser = getattr(sys.modules[mod], 'parse_data')
-        # 将all_info中的info实例传递给parser，parser抓取完成后，info实例的值已经完成更新
-        # TODO: 抓取器如果带有parse_data_raw，说明它已经自行进行了重试处理，此时将重试次数设置为1
-        if hasattr(sys.modules[mod], 'parse_data_raw'):
-            th = threading.Thread(target=wrapper, name=mod, args=(parser, info, 1))
-        else:
-            th = threading.Thread(target=wrapper, name=mod, args=(parser, info, Cfg().network.retry))
-        th.start()
-        thread_pool.append(th)
+        mod_name = f"javsp.web.{mod_partial}"
+        try:
+            mod = importlib.import_module(mod_name)
+            parser = getattr(mod, 'parse_data')
+            if hasattr(mod, 'parse_data_raw'):
+                th = threading.Thread(target=wrapper, name=mod_name, args=(parser, info, 1))
+            else:
+                th = threading.Thread(target=wrapper, name=mod_name, args=(parser, info, Cfg().network.retry))
+            th.start()
+            thread_pool.append(th)
+        except (ModuleNotFoundError, ImportError, AttributeError) as e:
+            logger.error(f"无法启动抓取器 {mod_name}: {e}")
+
     # 等待所有线程结束
     timeout = Cfg().network.retry * Cfg().network.timeout.total_seconds()
     for th in thread_pool:
-        th: threading.Thread
         th.join(timeout=timeout)
     # 根据抓取结果更新影片类型判定
     if movie.data_src == 'cid' and movie.dvdid:
@@ -154,7 +175,6 @@ def parallel_crawler(movie: Movie, tqdm_bar=None):
     for info in all_info.values():
         del info.success
     # 删除all_info中键名中的'web.'
-    all_info = {k[4:]:v for k,v in all_info.items()}
     return all_info
 
 
@@ -488,26 +508,25 @@ def RunNormalMode(all_movies):
                 scrape_interval = Cfg().summarizer.extra_fanarts.scrap_interval.total_seconds()
                 inner_bar.set_description('下载剧照')
                 if movie.info.preview_pics:
-                    extrafanartdir = movie.save_dir + '/extrafanart'
-                    os.mkdir(extrafanartdir)
+                    extrafanartdir = os.path.join(movie.save_dir, 'extrafanart')
+                    os.makedirs(extrafanartdir, exist_ok=True)
                     for (id, pic_url) in enumerate(movie.info.preview_pics):
                         inner_bar.set_description(f"Downloading extrafanart {id} from url: {pic_url}")
-                                                                                                                                
-                        fanart_destination = f"{extrafanartdir}/{id}.png"
+                        fanart_destination = os.path.join(extrafanartdir, f"{id}.jpg")
                         try:
                             info = download(pic_url, fanart_destination)
                             if valid_pic(fanart_destination):
-                                filesize = get_fmt_size(pic_path)
-                                width, height = get_pic_size(pic_path)
+                                filesize = get_fmt_size(fanart_destination)
+                                width, height = get_pic_size(fanart_destination)
                                 elapsed = time.strftime("%M:%S", time.gmtime(info['elapsed']))
                                 speed = get_fmt_size(info['rate']) + '/s'
-                                logger.info(f"已下载剧照{pic_url} {id}.png: {width}x{height}, {filesize} [{elapsed}, {speed}]")
+                                logger.info(f"已下载剧照 {id}.jpg: {width}x{height}, {filesize} [{elapsed}, {speed}]")
                             else:
-                                check_step(False, f"下载剧照{id}: {pic_url}失败")
-                        except:
-                            check_step(False, f"下载剧照{id}: {pic_url}失败")
+                                logger.warning(f"下载剧照 {id} 失败: 图片无效或已损坏")
+                        except Exception as e:
+                            logger.warning(f"下载剧照 {id} 出错: {e}")
                         time.sleep(scrape_interval)
-                check_step(True)
+                inner_bar.update()
 
             inner_bar.set_description('写入NFO')
             write_nfo(movie.info, movie.nfo_file)
@@ -589,7 +608,7 @@ def entry():
         Cfg()
     except ValidationError as e:
         print(e.errors())
-        exit(1)
+        sys.exit(1)
 
     global actressAliasMap
     if Cfg().crawler.normalize_actress_name:

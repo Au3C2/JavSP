@@ -18,10 +18,11 @@ def re_escape(s: str) -> str:
 def resource_path(path: str) -> str:
     """获取一个随代码打包的文件在解压后的路径"""
     if getattr(sys, "frozen", False):
-        return path
+        # PyInstaller 打包后的临时解压目录
+        base_path = sys._MEIPASS
     else:
-        path_joined = Path(__file__).parent.parent / path
-        return str(path_joined)
+        base_path = Path(__file__).parent.parent
+    return str(Path(base_path) / path)
 
 
 def strftime_to_minutes(s: str) -> int:

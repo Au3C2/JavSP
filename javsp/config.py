@@ -1,13 +1,20 @@
+import os
 from argparse import ArgumentParser, RawTextHelpFormatter
 from enum import Enum
-from typing import Dict, List, Literal, TypeAlias, Union
+from typing import Dict, List, Literal, TypeAlias, Union, Annotated
 from confz import BaseConfig, CLArgSource, EnvSource, FileSource
-from pydantic import ByteSize, Field, NonNegativeInt, PositiveInt
+from pydantic import ByteSize, Field, NonNegativeInt, PositiveInt, BeforeValidator
 from pydantic_extra_types.pendulum_dt import Duration
 from pydantic_core import Url
 from pathlib import Path
 
 from javsp.lib import resource_path
+
+# --- 辅助函数：将简写字符串转换为字典格式以通过 Pydantic 校验 ---
+def coerce_engine(v):
+    if isinstance(v, str):
+        return {"name": v}
+    return v
 
 class Scanner(BaseConfig):
     ignored_id_pattern: List[str]
@@ -172,6 +179,7 @@ class Summarizer(BaseConfig):
     fanart: FanartSummarize
     extra_fanarts: ExtraFanartSummarize
 
+# --- 翻译引擎定义 ---
 class BaiduTranslateEngine(BaseConfig):
     name: Literal['baidu']
     app_id: str
@@ -194,13 +202,17 @@ class OpenAITranslateEngine(BaseConfig):
 class GoogleTranslateEngine(BaseConfig):
     name: Literal['google']
 
-TranslateEngine: TypeAlias = Union[
+TranslateEngine: TypeAlias = Annotated[
+    Union[
         BaiduTranslateEngine,
         BingTranslateEngine,
         ClaudeTranslateEngine,
         OpenAITranslateEngine,
         GoogleTranslateEngine,
-        None]
+        None
+    ],
+    BeforeValidator(coerce_engine)
+]
 
 class TranslateField(BaseConfig):
     title: bool
@@ -216,13 +228,36 @@ class Other(BaseConfig):
     auto_update: bool
 
 def get_config_source():
+    import shutil
+    import sys
+    from colorama import init, Fore, Style
+    init(autoreset=True)
+
     parser = ArgumentParser(prog='JavSP', description='汇总多站点数据的AV元数据刮削器', formatter_class=RawTextHelpFormatter)
     parser.add_argument('-c', '--config', help='使用指定的配置文件')
     args, _ = parser.parse_known_args()
+    
     sources = []
-    if args.config is None:
-        args.config = resource_path('config.yml')
-    sources.append(FileSource(file=args.config))
+    config_file = args.config
+    
+    # 如果用户没指定配置，默认寻找当前目录下的 config.yml
+    if config_file is None:
+        local_config = Path('config.yml')
+        if not local_config.exists():
+            # 自动释放模板逻辑
+            template_path = resource_path('config.yml')
+            if os.path.exists(template_path):
+                shutil.copy(template_path, local_config)
+                print(f"\n{Fore.YELLOW}{Style.BRIGHT}[!] 首次运行检测：已在当前目录生成配置文件模板 'config.yml'")
+                print(f"{Fore.YELLOW}[!] 请根据需要修改配置文件（特别是代理和扫描目录）后重新运行程序。")
+                sys.exit(0)
+            else:
+                # 最后的保底：如果资源里也没找到（通常不应该发生）
+                config_file = template_path
+        else:
+            config_file = local_config
+            
+    sources.append(FileSource(file=config_file))
     sources.append(EnvSource(prefix='JAVSP_', allow_all=True))
     sources.append(CLArgSource(prefix='o'))
     return sources

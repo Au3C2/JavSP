@@ -13,7 +13,11 @@ base_url = str(Cfg().network.proxy_free[CrawlerID.avsox])
 
 def parse_data(movie: MovieInfo):
     """解析指定番号的影片数据"""
+    base_url = str(Cfg().network.proxy_free[CrawlerID.avsox])
+    if not base_url.endswith('/'):
+        base_url += '/'
     # avsox无法直接跳转到影片的网页，因此先搜索再从搜索结果中寻找目标网页
+
     full_id = movie.dvdid
     if full_id.startswith('FC2-'):
         full_id = full_id.replace('FC2-', 'FC2-PPV-')

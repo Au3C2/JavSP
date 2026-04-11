@@ -39,16 +39,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies (Pip-based for maximum stability)
+      - name: Install dependencies
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          # 直接从 pyproject.toml 安装，跳过 poetry.lock 校验
-          python -m pip install . cx-freeze poetry-dynamic-versioning
-
-      - name: Build with Cx_Freeze
-        shell: bash
-        run: python setup.py build_exe -b dist
+          python -m pip install . pyinstaller poetry-dynamic-versioning
 
       - name: Set VERSION variable
         shell: bash
@@ -56,17 +51,23 @@ jobs:
           VERSION=$(python tools/version.py)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+      - name: Build with PyInstaller (Custom Adaptive Logic)
+        run: |
+          python tools/build_exe.py
+
       - name: Package Artifacts (Windows)
         if: matrix.platform == 'windows'
         run: |
-          powershell Compress-Archive -Path dist\* -DestinationPath JavSP-${{ env.VERSION }}-windows-x64.zip
+          powershell Compress-Archive -Path "dist/JavSP.exe", "config.yml" -DestinationPath JavSP-${{ env.VERSION }}-windows-x64.zip
 
       - name: Package Artifacts (Linux/macOS)
         if: matrix.platform != 'windows'
-        shell: bash
         run: |
           cd dist
-          tar -czvf ../JavSP-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.platform == 'macos' && 'arm64' || 'x64' }}.tar.gz .
+          cp ../config.yml .
+          # 注意：在 Linux/macOS 下文件名可能不带 .exe
+          [ -f JavSP.exe ] && EXE_NAME="JavSP.exe" || EXE_NAME="JavSP"
+          tar -czvf ../JavSP-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.platform == 'macos' && 'arm64' || 'x64' }}.tar.gz $EXE_NAME config.yml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -94,9 +95,10 @@ jobs:
         id: extract_changelog
         shell: bash
         run: |
-          changelog=$(sed -n '/## \[Unreleased\]/,/## v/p' CHANGELOG.md | sed '1d;$d')
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          changelog=$(sed -n "/## $TAG_NAME/,/## v/p" CHANGELOG.md | sed '1d;$d')
           if [ -z "$changelog" ]; then
-            changelog=$(sed -n '/## v/,/## v/p' CHANGELOG.md | sed '$d')
+            changelog=$(sed -n '/## \[Unreleased\]/,/## v/p' CHANGELOG.md | sed '1d;$d')
           fi
           echo "BODY<<EOF" >> $GITHUB_OUTPUT
           echo "$changelog" >> $GITHUB_OUTPUT
