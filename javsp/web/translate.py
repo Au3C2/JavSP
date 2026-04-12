@@ -205,7 +205,7 @@ def claude_translate(texts, api_key, to="zh_CN"):
     }
     data = {
         "model": "claude-3-haiku-20240307",
-        "system": f"Translate the following Japanese paragraph into {to}, while leaving non-Japanese text, names, or text that does not look like Japanese untranslated. Reply with the translated text only, do not add any text that is not in the original content.",
+        "system": "Translate the following Japanese text into Simplified Chinese. Crucially: Keep all proper nouns, especially names of actresses, studios, and labels, in their original Japanese. Reply with the translated text only, no explanations.",
         "max_tokens": 1024,
         "messages": [{"role": "user", "content": texts}],
     }
@@ -230,7 +230,7 @@ def openai_translate(texts, url: Url, api_key: str, model: str, to="zh_CN"):
          "messages": [
            {
              "role": "system",
-             "content": f"Translate the following Japanese paragraph into {to}, while leaving non-Japanese text, names, or text that does not look like Japanese untranslated. Reply with the translated text only, do not add any text that is not in the original content."
+             "content": "Translate the following Japanese text into Simplified Chinese. Crucially: Keep all proper nouns, especially names of actresses, studios, and labels, in their original Japanese. Reply with the translated text only, no explanations."
            },
            {
              "role": "user",
