@@ -39,14 +39,28 @@ def read_proxy():
 # 处理网络请求的类，它带有默认的属性，但是也可以在各个抓取器模块里进行进行定制
 class Request():
     """作为网络请求出口并支持各个模块定制功能"""
-    def __init__(self, use_scraper=False) -> None:
+    def __init__(self, use_scraper=False, use_impersonate=False) -> None:
         # 必须使用copy()，否则各个模块对headers的修改都将会指向本模块中定义的headers变量，导致只有最后一个对headers的修改生效
         self.headers = headers.copy()
         self.cookies = {}
 
         self.proxies = read_proxy()
         self.timeout = Cfg().network.timeout.total_seconds()
-        if not use_scraper:
+        self.use_impersonate = use_impersonate
+        
+        if use_impersonate:
+            try:
+                from curl_cffi import requests as cur_requests
+                self.__get = cur_requests.get
+                self.__post = cur_requests.post
+                self.__head = cur_requests.head
+            except ImportError:
+                logger.warning("未安装 curl_cffi，将回退到普通 requests 模式。建议安装以获得更好的反爬能力。")
+                self.use_impersonate = False
+                self.__get = requests.get
+                self.__post = requests.post
+                self.__head = requests.head
+        elif not use_scraper:
             self.scraper = None
             self.__get = requests.get
             self.__post = requests.post
@@ -71,22 +85,37 @@ class Request():
         return wrapper
 
     def get(self, url, delay_raise=False):
-        r = self.__get(url,
-                      headers=self.headers,
-                      proxies=self.proxies,
-                      cookies=self.cookies,
-                      timeout=self.timeout)
+        kwargs = {
+            "headers": self.headers,
+            "proxies": self.proxies,
+            "cookies": self.cookies,
+            "timeout": self.timeout
+        }
+        if self.use_impersonate:
+            kwargs["impersonate"] = "chrome110"
+            # curl_cffi 的 proxies 格式略有不同
+            if self.proxies:
+                kwargs["proxies"] = { "http": str(Cfg().network.proxy_server), "https": str(Cfg().network.proxy_server) }
+        
+        r = self.__get(url, **kwargs)
         if not delay_raise:
             r.raise_for_status()
         return r
 
     def post(self, url, data, delay_raise=False):
-        r = self.__post(url,
-                      data=data,
-                      headers=self.headers,
-                      proxies=self.proxies,
-                      cookies=self.cookies,
-                      timeout=self.timeout)
+        kwargs = {
+            "data": data,
+            "headers": self.headers,
+            "proxies": self.proxies,
+            "cookies": self.cookies,
+            "timeout": self.timeout
+        }
+        if self.use_impersonate:
+            kwargs["impersonate"] = "chrome110"
+            if self.proxies:
+                kwargs["proxies"] = { "http": str(Cfg().network.proxy_server), "https": str(Cfg().network.proxy_server) }
+                
+        r = self.__post(url, **kwargs)
         if not delay_raise:
             r.raise_for_status()
         return r

@@ -12,9 +12,20 @@ from javsp.datatype import MovieInfo, GenreMap
 from javsp.chromium import get_browsers_cookies
 
 
-# 初始化Request实例。使用scraper绕过CloudFlare后，需要指定网页语言，否则可能会返回其他语言网页，影响解析
-request = Request(use_scraper=True)
-request.headers['Accept-Language'] = 'zh-CN,zh;q=0.9,zh-TW;q=0.8,en-US;q=0.7,en;q=0.6,ja;q=0.5'
+# 初始化Request实例。使用 use_impersonate=True 绕过 Cloudflare 的 TLS 指纹识别
+request = Request(use_impersonate=True)
+request.headers.update({
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7',
+    'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Bar";v="24", "Google Chrome";v="122"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1'
+})
 
 logger = logging.getLogger(__name__)
 genre_map = GenreMap('data/genre_javdb.csv')
@@ -28,30 +39,41 @@ else:
 def get_html_wrapper(url):
     """包装外发的request请求并负责转换为可xpath的html，同时处理Cookies无效等问题"""
     global request, cookies_pool
-    r = request.get(url, delay_raise=True)
+    try:
+        r = request.get(url, delay_raise=True)
+    except Exception as e:
+        logger.debug(f"JavDB 请求异常: {e}")
+        # 尝试自动刷新一次 Cookies 库
+        if 'cookies_pool' not in globals() or len(cookies_pool) == 0:
+            try:
+                cookies_pool = get_browsers_cookies()
+            except:
+                cookies_pool = []
+        
+        if len(cookies_pool) > 0:
+            item = cookies_pool.pop()
+            request.cookies = item['cookies']
+            logger.debug(f'请求异常，尝试使用浏览器 Cookies: {item["profile"]}')
+            return get_html_wrapper(url)
+        raise
+
     if r.status_code == 200:
         # 发生重定向可能仅仅是域名重定向，因此还要检查url以判断是否被跳转到了登录页
         if r.history and '/login' in r.url:
             # 仅在需要时去读取Cookies
-            if 'cookies_pool' not in globals():
+            if 'cookies_pool' not in globals() or len(cookies_pool) == 0:
                 try:
                     cookies_pool = get_browsers_cookies()
-                except (PermissionError, OSError) as e:
-                    logger.warning(f"无法从浏览器Cookies文件获取JavDB的登录凭据({e})，可能是安全软件在保护浏览器Cookies文件", exc_info=True)
-                    cookies_pool = []
                 except Exception as e:
-                    logger.warning(f"获取JavDB的登录凭据时出错({e})，你可能使用的是国内定制版等非官方Chrome系浏览器", exc_info=True)
+                    logger.debug(f"读取浏览器Cookies失败: {e}")
                     cookies_pool = []
             if len(cookies_pool) > 0:
                 item = cookies_pool.pop()
-                # 更换Cookies时需要创建新的request实例，否则cloudscraper会保留它内部第一次发起网络访问时获得的Cookies
-                request = Request(use_scraper=True)
                 request.cookies = item['cookies']
-                cookies_source = (item['profile'], item['site'])
-                logger.debug(f'未携带有效Cookies而发生重定向，尝试更换Cookies为: {cookies_source}')
+                logger.debug(f'发现登录重定向，尝试更换Cookies为: {item["profile"]}')
                 return get_html_wrapper(url)
             else:
-                raise CredentialError('JavDB: 所有浏览器Cookies均已过期')
+                raise CredentialError('JavDB: 需要登录访问，且未在本地浏览器找到有效会话。请在浏览器登录 JavDB 后再试。')
         elif r.history and 'pay' in r.url.split('/')[-1]:
             raise SitePermissionError(f"JavDB: 此资源被限制为仅VIP可见: '{r.history[0].url}'")
         else:
@@ -61,6 +83,15 @@ def get_html_wrapper(url):
         html = resp2html(r)
         code_tag = html.xpath("//span[@class='code-label']/span")
         error_code = code_tag[0].text if code_tag else None
+        
+        # 针对 Cloudflare 403 的特殊引导
+        if r.status_code == 403:
+            logger.error("\n" + "!"*60)
+            logger.error("JavDB: 触发了 Cloudflare 强力拦截 (403 Forbidden)")
+            logger.error("对策: 请确保您的代理可用，或在浏览器中打开一次 https://javdb.com 过验证")
+            logger.error("提示: 若要彻底解决，请在浏览器中【登录】JavDB，JavSP 会自动同步您的登录状态")
+            logger.error("!"*60 + "\n")
+            
         if error_code:
             if error_code == '1020':
                 block_msg = f'JavDB: {r.status_code} 禁止访问: 站点屏蔽了来自日本地区的IP地址，请使用其他地区的代理服务器'
