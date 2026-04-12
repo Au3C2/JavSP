@@ -172,25 +172,30 @@ def check_update(allow_check=True, auto_update=True):
         print('=' * display_width)
         print('')
 
-    # 使用pyinstaller打包exe时生成hook，运行时由该hook将版本信息注入到sys中
-    try:
-        local_version = meta.version('javsp')
-    except meta.PackageNotFoundError:
-        local_version = "0.0.0-dev"
+    # 优先从 sys 属性中读取构建时注入的版本号，否则尝试从包元数据读取
+    local_version = getattr(sys, 'javsp_version', None)
+    if not local_version:
+        try:
+            local_version = meta.version('javsp')
+        except meta.PackageNotFoundError:
+            local_version = "0.0.0-dev"
     
     if local_version == "":
         return
     # 检查更新
     if allow_check:
-        api_url = 'https://api.github.com/repos/Yuukiy/JavSP/releases/latest'
-        release_url = 'https://github.com/Yuukiy/JavSP/releases/latest'
+        api_url = 'https://api.github.com/repos/Au3C2/JavSP/releases/latest'
+        release_url = 'https://github.com/Au3C2/JavSP/releases/latest'
         print('正在检查更新...', end='')
         try:
             data = request_get(api_url, timeout=3).json()
             latest_version = data['tag_name']
             release_time = utc2local(data['published_at'])
             release_date = release_time.isoformat().split('T')[0]
-            if version.parse(local_version) < version.parse(latest_version):
+            # 兼容带有 'v' 前缀的版本号对比
+            v_local = version.parse(local_version.lstrip('v'))
+            v_latest = version.parse(latest_version.lstrip('v'))
+            if v_local < v_latest:
                 update_status = 'new_version'
             else:
                 update_status = 'already_latest'
@@ -208,10 +213,8 @@ def check_update(allow_check=True, auto_update=True):
         title = f'Jav Scraper Package: {local_version} (已是最新版)'
         print_header([title])
     elif update_status == 'fail_to_check':
-        release_url_mirror = 'https://hub.fastgit.xyz/Yuukiy/JavSP/releases/latest'
         titles = [f'Jav Scraper Package: {local_version}']
-        info = ['检查更新失败，请前往以下地址查看最新版本:', '  '+release_url,
-                '如果你打不开上面的地址，也可以尝试访问镜像站点:', '  '+release_url_mirror]
+        info = ['检查更新失败，请前往以下地址查看最新版本:', '  '+release_url]
         print_header(titles, info)
     elif update_status == 'new_version':
         titles = [f'Jav Scraper Package: {local_version}']

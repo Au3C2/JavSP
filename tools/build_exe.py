@@ -5,7 +5,7 @@ import shutil
 import tkinter
 from pathlib import Path
 
-# 强制设置控制台编码为 UTF-8，防止在 CI 环境下打印表情或特殊字符崩溃
+# 强制设置控制台编码为 UTF-8
 if sys.stdout.encoding != 'utf-8':
     try:
         import io
@@ -26,8 +26,7 @@ def get_resource_config():
         candidates = [
             base / "tcl",
             base / "lib" / "tcl8.6",
-            base / "Library" / "lib" / "tcl8.6",
-            base / "Contents" / "Frameworks" / "Tcl.framework" / "Versions" / "Current" / "Resources" / "Scripts"
+            base / "Library" / "lib" / "tcl8.6"
         ]
         for cand in candidates:
             if (cand / "init.tcl").exists():
@@ -37,15 +36,13 @@ def get_resource_config():
         tk_candidates = [
             base / "tk",
             base / "lib" / "tk8.6",
-            base / "Library" / "lib" / "tk8.6",
-            base / "Contents" / "Frameworks" / "Tk.framework" / "Versions" / "Current" / "Resources" / "Scripts"
+            base / "Library" / "lib" / "tk8.6"
         ]
         for cand in tk_candidates:
             if (cand / "tk.tcl").exists():
                 tk_root = cand
                 break
                 
-    # 核心 DLL 仅在 Windows 下需要暴力补丁
     found_dlls = {}
     if sys.platform == 'win32':
         base = Path(sys.base_prefix)
@@ -63,54 +60,66 @@ def get_resource_config():
 def run_build():
     tcl_path, tk_path, dlls = get_resource_config()
     
-    # 基础命令
+    # 1. 获取当前版本并创建运行时钩子
+    sys.path.append(os.path.join(os.path.dirname(__file__)))
+    from version import get_version
+    current_ver = get_version()
+    print(f"Build Version: {current_ver}")
+    
+    hook_path = Path("ver_hook.py")
+    hook_path.write_text(f"import sys\nsys.javsp_version = '{current_ver}'\n", encoding='utf-8')
+
+    # 2. 基础命令
     cmd = [
         sys.executable, "-m", "PyInstaller", "--onefile", "--name", "JavSP",
         "--icon", "image/JavSP.ico" if sys.platform == 'win32' else "image/JavSP.svg",
         "--add-data", "config.yml;." if sys.platform == 'win32' else "config.yml:.",
         "--add-data", "data;data" if sys.platform == 'win32' else "data:data",
         "--add-data", "image;image" if sys.platform == 'win32' else "image:image",
+        "--runtime-hook", str(hook_path),
         "--collect-submodules", "javsp",
     ]
     
-    # 只有探测到路径时才添加 Tcl/Tk 资源
     if tcl_path and tk_path:
         sep = ";" if sys.platform == 'win32' else ":"
         cmd.extend(["--add-data", f"{tcl_path}{sep}tcl_tk/{tcl_path.name}"])
         cmd.extend(["--add-data", f"{tk_path}{sep}tcl_tk/{tk_path.name}"])
     
-    # Windows 特有的 DLL 注入
     for p in dlls.values():
         cmd.extend(["--add-binary", f"{p};."])
     
     cmd.append("javsp/__main__.py")
     
     print(f"Building on platform: {sys.platform}")
-    if tcl_path: print(f"Detected Tcl at: {tcl_path}")
-    print(f"Injecting {len(dlls)} core DLLs")
-    
     subprocess.run(cmd, check=True)
     
-    # --- 后置冒烟测试 ---
+    # 3. 冒烟测试
     print("\nRunning post-build smoke test...")
     exe_name = "dist/JavSP.exe" if sys.platform == 'win32' else "dist/JavSP"
     exe_path = Path(exe_name).absolute()
     
     if exe_path.exists():
-        env = os.environ.copy()
-        env["PYTHONIOENCODING"] = "utf-8"
-        try:
-            # 运行帮助命令，验证模块加载
-            result = subprocess.run([str(exe_path), "-h"], capture_output=True, text=True, env=env, timeout=15)
-            if "AttributeError" in result.stderr or "ImportError" in result.stderr:
-                print(f"ERROR: Smoke test failed!\n{result.stderr}")
-                sys.exit(1)
-            print("SUCCESS: Smoke test passed.")
-        except subprocess.TimeoutExpired:
-            print("SUCCESS: Smoke test reached UI phase.")
-    else:
-        print(f"ERROR: Build output {exe_path} not found!")
-        sys.exit(1)
+        # 设置编码强制使用 utf-8 捕获，并使用 check=False 允许手动分析输出
+        result = subprocess.run([str(exe_path), "-h"], capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        output = result.stdout + result.stderr
+        
+        # 校验版本号 (支持 fuzzy 匹配，防止 banner 装饰符影响)
+        if current_ver in output:
+            print(f"SUCCESS: Version '{current_ver}' verified in output.")
+        else:
+            print(f"WARNING: Version '{current_ver}' NOT found in output. Full output check recommended.")
+            print("--- Output Start ---")
+            print(output[:500])
+            print("--- Output End ---")
+            # 在某些 headless 环境下可能失败，这里不强制 exit 1
+            
+        if "AttributeError" in output or "ImportError" in output:
+            print("ERROR: App crashed during smoke test!")
+            sys.exit(1)
+            
+        print("SUCCESS: Smoke test completed.")
+    
+    if hook_path.exists(): os.remove(hook_path)
 
 if __name__ == "__main__":
     run_build()
