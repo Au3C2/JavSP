@@ -50,27 +50,27 @@ JavSP 是一个工业级的元数据刮削器，核心目标是将凌乱的影�
 
 ---
 
-## 4. 必坑指南（实战沉淀）
+## 4. 避坑指南（实战沉淀）
 
-### 🚨 避坑 1：PyInstaller & Conda 的 DLL 地狱
+### 避坑 1：PyInstaller & Conda 的 DLL 地狱
 **问题**：在 Conda 环境打包后，`_ssl`, `_ctypes`, `_sqlite3` 等模块常报 `DLL load failed`。
 **对策**：在 `tools/build_exe.py` 中实施“暴力采集策略”，扫描 `Library/bin` 目录并将所有核心 DLL 全部强制打入包内。
 
-### 🚨 避坑 2：Tcl/Tk 资源定位消失
+### 避坑 2：Tcl/Tk 资源定位消失
 **问题**：单文件版启动时提示 `Can't find a usable init.tcl`。
 **对策**：
 1. 在打包时动态获取 `tkinter.Tcl().eval('info library')` 的真实路径。
 2. 在 `__main__.py` 顶部使用递归扫描算法探测 `_MEIPASS` 下的 `tcl_tk` 目录，并动态设置 `TCL_LIBRARY` 环境变量。
 
-### 🚨 避坑 3：Pydantic V2 兼容性
+### 避坑 3：Pydantic V2 兼容性
 **问题**：代码中直接调用模型对象的 `.values()` 或属性访问在 V2 中会报错。
 **对策**：始终先执行 `.model_dump()` 将其转换为字典后再进行遍历操作。
 
-### 🚨 避坑 4：单文件环境下的 exit()
+### 避坑 4：单文件环境下的 exit()
 **问题**：打包后使用 `exit()` 会导致 `NameError`。
 **对策**：在全工程范围内禁用内置 `exit()`，必须且只能使用 `sys.exit()`。
 
-### 🚨 避坑 5：Windows 控制台的编码陷阱
+### 避坑 5：Windows 控制台的编码陷阱
 **问题**：打印 Emoji 或特殊 Unicode 字符会导致 CI 环境下的 `UnicodeEncodeError`。
 **对策**：在构建脚本和主程序入口处强制执行 `sys.stdout.reconfigure(encoding='utf-8')` 或移除装饰性非 ASCII 字符。
 
@@ -89,12 +89,56 @@ docker run --rm \
 *   **`-i /video`**: 强制指定扫描目录为容器内的挂载点。
 *   **配置挂载**: 建议将本地修改好的 `config.yml` 挂载到 `/app/config.yml` 以覆盖默认设置（如代理）。
 
-## 6. 维护者后续指引
+## 6. 标准开发与版本发布流程
 
-若需更新版本并发布：
-1. 修改 `pyproject.toml` 中的版本号或推送新的 Git Tag。
-2. 在本地执行 `python tools/build_exe.py` 进行**实战冒烟测试**（处理真实目录，确认 UI 弹出）。
-3. 确认无误后推送 `master` 并刷新标签，GitHub Actions 会自动根据 `build_exe.py` 产出三平台单文件包。
+为确保代码稳定性与发布质量，维护者必须严格遵循“开发 -> CI 校验 -> 打 Tag -> 云端自动发布”的流水线规范。
+
+### 6.1 日常开发流程
+1. **本地开发与测试**：在本地修改代码后，先执行基础单元测试校验：
+   ```bash
+   python -m pytest unittest/test_avid.py unittest/test_func.py -v
+   ```
+2. **提交与推送**：保持标准提交规范（如 `feat:`、`fix:`），直接推送到远程仓库：
+   ```bash
+   git add .
+   git commit -m "feat(module): description"
+   git push origin master
+   ```
+3. **CI 自动校验**：GitHub Actions 会自动触发 `test-basic-funcs` 和 `test-web-funcs` 工作流。确认 GitHub 上最新的 Commit 显示绿色通过标记。
+
+### 6.2 标准版本发布流程 (Release Workflow)
+当积累了若干功能或 Bug 修复，决定发布新版本（例如 `v1.8.3`）时，依次执行以下步骤：
+
+1. **确认 CI 校验通过**：确认 `master` 分支最新的 Commit 在 GitHub Actions 上已全部通过（标绿）。
+2. **更新 CHANGELOG.md**：将 `[Unreleased]` 中的修改内容按 `Added` / `Fixed` / `Optimized` 分类整理至新版本号标题段落中（如 `## v1.8.3 - YYYY-MM-DD`）。
+3. **提交 CHANGELOG**：
+   ```bash
+   git add CHANGELOG.md
+   git commit -m "docs: release v1.8.3"
+   git push origin master
+   ```
+4. **本地冒烟打包测试（可选）**：
+   在本地执行构建脚本验证产物结构：
+   ```bash
+   python tools/build_exe.py
+   ```
+5. **打 Git Tag 并推送（触发云端 Release 发布）**：
+   在最新且测试通过的 `master` 节点上创建并推送标签（此步为触发 GitHub Actions 编译发布的唯一开关）：
+   ```bash
+   git tag -a v1.8.3 -m "Release v1.8.3"
+   git push origin v1.8.3
+   ```
+
+### 6.3 云端自动发布产物
+推送 `v*` 标签后，GitHub Actions 会自动完成以下操作：
+- 在 Windows 虚拟机上调用 PyInstaller 打包单文件二进制可执行程序 (`JavSP.exe`)；
+- 自动解析 `CHANGELOG.md` 中对应版本的变更说明；
+- 自动创建 GitHub Release 页面并上传发布二进制压缩包；
+- 自动构建 `amd64` 和 `arm64` 架构的 Docker 镜像并推送至 GHCR 容器镜像仓库。
+
+### 6.4 防踩坑注意事项
+- **严格遵循提交顺序**：切勿先打 Tag 再补提交。必须保证代码与 `CHANGELOG.md` 均已提交并推送到 `master`，且 CI 通过后，再打 Tag 推送。
+- **构建重跑机制**：若 Actions 云端编译由于网络闪断偶然失败，无需删除或重新创建 Tag，直接在 GitHub Actions 页面点击 "Re-run jobs" 重新运行即可。
 
 ---
 **Maintainer**: Au3C2  
