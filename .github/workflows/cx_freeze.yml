@@ -28,7 +28,7 @@ jobs:
           submodules: 'true'
 
       - name: Fetch tags
-        run: git fetch --prune --unshallow --tags
+        run: git fetch --prune --unshallow --tags --force || git fetch --tags --force
 
       - name: Setup Python 3.10
         uses: actions/setup-python@v5
