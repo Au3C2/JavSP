@@ -43,11 +43,11 @@ def call_crawlers(dvdid_list: list, used_crawlers=None):
         crawlers = {i:all_crawler[i] for i in used_crawlers}
     else:
         crawlers = all_crawler
-    outer_bar = tqdm(dvdid_list, desc='抓取影片数据', leave=False)
+    outer_bar = tqdm(dvdid_list, desc='抓取影片数据', ascii=True, ncols=120, leave=False)
     for avid in outer_bar:
         success, fail = [], []
         outer_bar.set_description(f'抓取影片数据: {avid}')
-        inner_bar = tqdm(crawlers.items(), desc='抓取器', leave=False)
+        inner_bar = tqdm(crawlers.items(), desc='抓取器', ascii=True, ncols=120, leave=False)
         for name, parser in inner_bar:
             inner_bar.set_description(f'正在抓取{name}'.rjust(10+len(avid)))
             # 每次都会创建一个全新的实例，所以不同抓取器的结果之间不会有影响

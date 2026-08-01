@@ -115,10 +115,11 @@ def get_cookies(cookies_file, decrypter, host_pattern='javdb%.com'):
     try:
         copyfile(cookies_file, temp_cookie)
     except PermissionError:
-        logger.debug(f"Cookies文件正被浏览器占用，请关闭浏览器后再试: {cookies_file}")
+        # Browser is running and holding an exclusive lock on the cookies database
+        logger.warning(f"Cookies file is currently locked by a running browser. Please close your browser completely: {cookies_file}")
         return {}
     except Exception as e:
-        logger.debug(f"无法拷贝Cookies文件: {e}")
+        logger.debug(f"Failed to copy cookies file: {e}")
         return {}
 
     # 连接数据库进行查询
@@ -139,8 +140,8 @@ def get_cookies(cookies_file, decrypter, host_pattern='javdb%.com'):
                     d[name] = decrypter.decrypt(encrypted_value)
                 except Exception:
                     pass
-        # Cookies的核心字段是'_jdb_session'，因此如果records中缺失此字段（说明已过期），则对应的Cookies不再有效
-        valid_records = {k: v for k, v in records.items() if '_jdb_session' in v}
+        # Core cookie keys are '_jdb_session' or 'cf_clearance'
+        valid_records = {k: v for k, v in records.items() if '_jdb_session' in v or 'cf_clearance' in v}
         conn.close()
     finally:
         if os.path.exists(temp_cookie):

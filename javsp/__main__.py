@@ -194,9 +194,9 @@ def entry():
         movie.poster_file = os.path.join(movie.save_dir, javsp.config.Cfg().summarizer.cover.basename_pattern.format(**copyd) + '.jpg')
 
     def RunNormalMode(all_movies):
-        outer_bar = tqdm(all_movies, desc='整理影片', ascii=True, leave=False)
+        outer_bar = tqdm(all_movies, desc='整理影片', ascii=True, ncols=120, leave=False)
         for movie in outer_bar:
-            inner_bar = tqdm(total=8, desc='步骤', ascii=True, leave=False)
+            inner_bar = tqdm(total=8, desc='步骤', ascii=True, ncols=120, leave=False)
             try:
                 filenames = [os.path.split(i)[1] for i in movie.files]
                 logger.info('正在整理: ' + ', '.join(filenames))
@@ -244,6 +244,12 @@ def entry():
     root = javsp.func.get_scan_dir(javsp.config.Cfg().scanner.input_directory)
     if not root: sys.exit(1)
     import_crawlers()
+    # Pre-check JavDB cookie once at startup to avoid repeated popups during batch processing
+    try:
+        javsp.web.javdb.ensure_javdb_cookie_ready()
+    except Exception as e:
+        logger.debug(f"Pre-checking JavDB cookie failed: {e}")
+
     os.chdir(root)
     recognized = javsp.file.scan_movies(root)
     if not recognized:

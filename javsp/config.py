@@ -122,6 +122,7 @@ class Crawler(BaseConfig):
     sleep_after_scraping: Duration
     use_javdb_cover: UseJavDBCover
     normalize_actress_name: bool
+    javdb_cookie: str | None = None
 
 class MovieDefault(BaseConfig):
     title: str
@@ -227,7 +228,10 @@ class Other(BaseConfig):
     check_update: bool
     auto_update: bool
 
+ACTIVE_CONFIG_FILE: str = 'config.yml'
+
 def get_config_source():
+    global ACTIVE_CONFIG_FILE
     import shutil
     import sys
     from colorama import init, Fore, Style
@@ -257,7 +261,8 @@ def get_config_source():
                 config_file = template_path
         else:
             config_file = local_config
-            
+
+    ACTIVE_CONFIG_FILE = str(config_file)
     sources.append(FileSource(file=config_file))
 
     # 命令行手动覆盖优先 (支持 -i 简写)
@@ -269,6 +274,50 @@ def get_config_source():
     sources.append(EnvSource(prefix='JAVSP_', allow_all=True))
     sources.append(CLArgSource(prefix='o'))
     return sources
+
+
+def save_javdb_cookie_to_config(cookie_str: str) -> None:
+    """Save the acquired javdb_cookie string to active config files and update memory state"""
+    import re
+    if not cookie_str:
+        return
+    
+    # Update active Cfg memory instance
+    try:
+        Cfg().crawler.javdb_cookie = cookie_str
+    except Exception:
+        pass
+
+    # Save to active config file and candidate config paths
+    target_files = set()
+    if ACTIVE_CONFIG_FILE and os.path.exists(ACTIVE_CONFIG_FILE):
+        target_files.add(ACTIVE_CONFIG_FILE)
+    for candidate in ['config.yml', 'dist/config.yml']:
+        if os.path.exists(candidate):
+            target_files.add(candidate)
+
+    for cfg_file in target_files:
+        try:
+            with open(cfg_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            if re.search(r'^\s*#?\s*javdb_cookie:', content, re.MULTILINE):
+                new_content = re.sub(
+                    r'^\s*#?\s*javdb_cookie:.*',
+                    f'  javdb_cookie: "{cookie_str}"',
+                    content,
+                    flags=re.MULTILINE
+                )
+            else:
+                new_content = re.sub(
+                    r'(crawler:\s*\n)',
+                    f'\\1  javdb_cookie: "{cookie_str}"\n',
+                    content
+                )
+            with open(cfg_file, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+        except Exception:
+            pass
+
 
 class Cfg(BaseConfig):
     scanner: Scanner

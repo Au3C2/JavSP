@@ -7,9 +7,10 @@ from javsp.web.base import Request, resp2html
 from javsp.web.exceptions import *
 from javsp.func import *
 from javsp.avid import guess_av_type
-from javsp.config import Cfg, CrawlerID
 from javsp.datatype import MovieInfo, GenreMap
 from javsp.chromium import get_browsers_cookies
+from javsp.cdp_cookie import interactive_fetch_cookie
+from javsp.config import Cfg, CrawlerID, save_javdb_cookie_to_config
 
 
 # 初始化Request实例。使用 use_impersonate=True 绕过 Cloudflare 的 TLS 指纹识别
@@ -36,9 +37,27 @@ else:
     base_url = str(Cfg().network.proxy_free[CrawlerID.javdb])
 
 
+def parse_cookie_str(cookie_str: str) -> dict:
+    """Parse cookie string into dictionary format"""
+    cookies = {}
+    if not cookie_str:
+        return cookies
+    for item in cookie_str.split(';'):
+        item = item.strip()
+        if '=' in item:
+            k, v = item.split('=', 1)
+            cookies[k.strip()] = v.strip()
+    return cookies
+
+
 def get_html_wrapper(url):
     """包装外发的request请求并负责转换为可xpath的html，同时处理Cookies无效等问题"""
     global request, cookies_pool
+    # Priority: apply manually configured javdb_cookie from Cfg if available
+    manual_cookie = getattr(Cfg().crawler, 'javdb_cookie', None)
+    if manual_cookie and not request.cookies:
+        request.cookies = parse_cookie_str(manual_cookie)
+
     try:
         r = request.get(url, delay_raise=True)
     except Exception as e:
@@ -80,6 +99,30 @@ def get_html_wrapper(url):
             html = resp2html(r)
             return html
     elif r.status_code in (403, 503):
+        # Try automatically using/switching browser cookies when encountering 403/503
+        if 'cookies_pool' not in globals() or len(cookies_pool) == 0:
+            try:
+                cookies_pool = get_browsers_cookies()
+            except Exception as e:
+                logger.debug(f"Failed to read browser cookies: {e}")
+                cookies_pool = []
+        if len(cookies_pool) > 0:
+            item = cookies_pool.pop()
+            request.cookies = item['cookies']
+            logger.debug(f'Encountered 403/503 block, attempting to use browser cookies: {item["profile"]}')
+            return get_html_wrapper(url)
+
+        # Launch interactive Edge browser popup via CDP to fetch cookies
+        try:
+            new_cookie_str = interactive_fetch_cookie(url)
+            if new_cookie_str:
+                request.cookies = parse_cookie_str(new_cookie_str)
+                save_javdb_cookie_to_config(new_cookie_str)
+                logger.info("Successfully acquired cookies via browser popup and saved to config file. Retrying request...")
+                return get_html_wrapper(url)
+        except Exception as e:
+            logger.debug(f"Failed interactive cookie extraction: {e}")
+
         html = resp2html(r)
         code_tag = html.xpath("//span[@class='code-label']/span")
         error_code = code_tag[0].text if code_tag else None
@@ -352,6 +395,34 @@ def collect_actress_alias(type=0, use_original=True):
         json.dump(existing_data, file, ensure_ascii=False, indent=2)
 
     print(f"已爬取 {count} 个女优，数据已更新并写回文件:", actressAliasFilePath)
+
+
+def ensure_javdb_cookie_ready() -> None:
+    """Pre-check JavDB cookie once at startup before batch processing starts"""
+    global request
+    manual_cookie = getattr(Cfg().crawler, 'javdb_cookie', None)
+    if manual_cookie:
+        request.cookies = parse_cookie_str(manual_cookie)
+        return
+
+    # Try quick request to check whether JavDB is blocked by Cloudflare 403
+    try:
+        r = request.get(f'{base_url}/search?q=test', delay_raise=True)
+        if r.status_code == 200:
+            return
+    except Exception:
+        pass
+
+    # Trigger browser popup ONCE at start
+    logger.info("JavDB 防护预检：未在配置中检测到有效 Cookie，正在开头发起一次性过盾/登录...")
+    try:
+        new_cookie_str = interactive_fetch_cookie(base_url)
+        if new_cookie_str:
+            request.cookies = parse_cookie_str(new_cookie_str)
+            save_javdb_cookie_to_config(new_cookie_str)
+            logger.info("已成功在开局获取 JavDB Cookie 并写入配置文件！后续整理将不再弹出窗口。")
+    except Exception as e:
+        logger.debug(f"Start precheck cookie fetch failed: {e}")
 
 
 if __name__ == "__main__":

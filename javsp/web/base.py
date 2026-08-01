@@ -137,6 +137,11 @@ class Request():
 
 
 class DownloadProgressBar(tqdm):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('ascii', True)
+        kwargs.setdefault('ncols', 120)
+        super().__init__(*args, **kwargs)
+
     def update_to(self, b=1, bsize=1, tsize=None):
         if tsize is not None:
             self.total = tsize
