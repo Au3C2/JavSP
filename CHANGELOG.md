@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## v1.8.3 - 2026-08-01
+
+### Added
+- **JavDB 交互式 CDP Cookie 提取**: 引入全新的 `javsp.cdp_cookie` 模块，利用底层 Chrome DevTools Protocol (CDP) 自动启动内置 Chromium/Edge 浏览器窗口，轻松绕过 Cloudflare 防护及现代浏览器 App-Bound Encryption (`v20`) 磁盘加密限制。
+- **自动抓取与持久化写回**: 当遭遇 Cloudflare 403 防护拦截时，会自动在整场整理开头进行一次性无感弹窗过盾/登录，并将捕获的 Cookie 自动持久化保存到 `config.yml` 配置文件中。
+- **跨平台浏览器感知与自适应探测**: 实现 `find_executable_browser()` 函数，自动支持 Windows (注册表/路径)、macOS (.app) 及 Linux/Docker 多平台下 Edge、Chrome、Chromium、Brave、Vivaldi 等主流浏览器的动态定位。
+
+### Optimized
+- **标准进度条显示限制**: 为全项目 `tqdm` 进度条统一增加了 `ascii=True` 和 `ncols=120` 参数，彻底避免不同终端字符集及窗口宽度下的显示错乱问题。
+
 ## v1.8.2 - 2026-04-11
 
 ### Added
