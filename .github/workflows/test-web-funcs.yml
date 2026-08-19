@@ -45,6 +45,7 @@ jobs:
     - name: Public IP
       id: ip
       uses: haythem/public-ip@v1.3
+      continue-on-error: true
     - name: Test proxyfree.py
       run: |
         pytest unittest/test_proxyfree.py
